@@ -1,1 +1,161 @@
+setwd("C:/Users/Administrator/Desktop/R training")
+
+library(sf)
+library(dplyr)
+library(terra)
+eth <- st_read("eth_admbnda_adm3_csa_bofedb_2021.shp")
+sidama <- eth %>% filter(ADM2_EN=="Sidama")
+shp <- eth %>% filter(ADM2_EN=="Sidama") %>% st_transform(4326)
+
+
+sidama_vect <- vect(shp)
+
+
+rain  <- rast("agg_terraclimate_ppt_1958_CurrentYear_GLOBE.nc")
+
+library(elevatr)
+dem <- get_elev_raster(
+  locations = shp,
+  z = 10,              # zoom level (8–10 recommended)
+  clip = "locations"
+)
+
+rain_sidama <- crop(rain, sidama_vect)
+rain_sidama <- mask(rain_sidama, sidama_vect)
+time(rain_sidama)
+
+years <- format(time(rain_sidama), "%Y")
+
+annual_rain <- tapp(rain_sidama, index = years, sum, na.rm = TRUE)
+
+mean_annual <- app(annual_rain, mean, na.rm = TRUE)
+rain <- project(mean_annual, dem)
+
+
+dem  <- resample(dem, ndvi, method="bilinear")
+rain <- resample(mean_annual, ndvi, method="bilinear") 
+
+
+slope <- terrain(dem, v = "slope", unit = "degrees")
+
+plot(slope, main = "Slope (degrees)")
+
+
+slope_rc <- classify(slope, rcl = matrix(
+  c(0, 5, 1,
+    5, 15, 2,
+    15, 30, 3,
+    30, 90, 4),
+  ncol = 3, byrow = TRUE
+))
+
+
+rain_rc <- classify(rain, rcl = matrix(
+  c(0, 800, 1,
+    800, 1200, 2,
+    1200, 1600, 3,
+    1600, 3000, 4),
+  ncol = 3, byrow = TRUE
+))
+
+
+lsi <- (slope_rc * 0.65) + (rain_rc * 0.35)
+plot(lsi, main = "Landslide Susceptibility Index")
+
+# Extract values
+# Extract values
+v <- values(lsi, na.rm = TRUE)
+
+# Quantile breaks
+q <- quantile(v, probs = seq(0, 1, length.out = 6))
+
+# Reclassification matrix
+rcl <- cbind(q[-6], q[-1], 1:5)
+
+# Fix upper bound
+rcl[5,2] <- rcl[5,2] + 1e-6
+
+# Classify
+lsi_class <- terra::classify(lsi, rcl = rcl, include.lowest = TRUE)
+
+
+
+vul_df <- as.data.frame(lsi_class, xy = TRUE, na.rm = TRUE)
+colnames(vul_df) <- c("x", "y", "vulnerability")
+
+head(vul_df)
+
+vul_df$class <- factor(
+  vul_df$vulnerability,
+  levels = c(1, 2, 3, 4, 5),            # numeric classes in order
+  labels = c("Very Low", "Low", "Moderate", "High", "Very High")  # descriptive labels
+)
+
+
+vul_colors <- c(
+  "Very Low"   = "#e5f5e0",  # light green
+  "Low"        = "#a1d99b",  # green
+  "Moderate"   = "#fee391",  # yellow
+  "High"       = "#ec7014",  # orange
+  "Very High"  = "#990000"   # dark red
+)
+
+
+
+
+
+vul_plot <- ggplot() +
+  geom_raster(data = vul_df,
+              aes(x = x, y = y, fill = class)) +
+  scale_fill_manual(
+    values = vul_colors,
+    name = "Landslide vulnerability"
+  ) +
+  geom_sf(
+    data = sidama,
+    fill = NA,
+    color = "black",
+    linewidth = 0.6) +
+  labs(
+    title = "Landslide vulnerability of Sidama Region",
+    subtitle = "Based on rainfall, elevation, and slope",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 11)
+  )+
+  theme(plot.title = element_text(size = 16, face = "bold"))+
+  annotation_scale(location = "bl", width_hint = 0.5) +
+  annotation_north_arrow(location = "tl", which_north = "true", 
+                         pad_x = unit(0.0, "in"), pad_y = unit(0.2, "in"),
+                         style = north_arrow_nautical)+
+  theme(axis.text.x = element_text(face="bold", color= "black", 
+                                   size=12),
+        axis.text.y = element_text(face="bold", color="black", 
+                                   size=12))+
+  theme(axis.title.x = element_text(color="black", size=14, face="bold"),
+        axis.title.y = element_text(color="black", size=14, face="bold"))+ 
+  labs(caption = "\u00A9 2025 Markos Ware")+
+  theme(panel.grid.major = element_line(
+    color = "black", linetype = 2,
+    linewidth = 0.5), panel.grid.minor = element_blank(),
+    panel.ontop = TRUE,
+    panel.background = element_rect(fill = NA, color = "black",
+                                    linewidth = 1))+
+  theme(
+    legend.position = c(0.8, 0.8)) 
+
+vul_plot
+
+ggsave(
+  filename = "landslide_vulnerbility.png",
+  plot = vul_plot,  # specify the ggplot object
+  width = 8,       # in inches
+  height = 7,
+  dpi = 300
+)
 
