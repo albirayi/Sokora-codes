@@ -1,0 +1,78 @@
+
+
+library(terra)
+library(curl)
+library(openxlsx)
+library(sf)
+
+# URL
+url <- "https://data.chc.ucsb.edu/products/CHIRPS-2.0/global_monthly/netcdf/chirps-v2.0.monthly.nc"
+
+# Download
+curl_download(url, "chirps_monthly.nc")
+
+# Load CHIRPS
+chirps <- rast("chirps_monthly.nc")
+
+setwd("C:/Users/Administrator/Desktop/R training")
+sh <- st_read("eth_admbnda_adm3_csa_bofedb_2021.shp")
+
+Amhara <- subset(sh, ADM1_EN=="Amhara")
+roi_vect <- vect(Amhara)
+
+
+chirps <- crop(chirps, roi_vect)
+chirps <- mask(chirps, roi_vect)
+
+dates <- seq(as.Date('1981-01-01'), as.Date('2025-12-01'), 'month')
+
+time(chirps)
+
+# Global mean rainfall
+rain <- global(chirps, "mean", na.rm = TRUE)
+
+# Dataframe
+df <- data.frame(
+  Date = as.Date(time(chirps)),
+  Rainfall_mm = rain[,1]
+)
+
+head(df)
+# Export to Excel
+write.csv(df, "chirps_monthly.csv")
+
+
+
+# Check number of layers and dates
+#nlayers(chirps)   # number of months
+time(chirps)      # dates
+
+# Convert raster to points (lon, lat, values)
+pts <- as.data.frame(chirps, xy = TRUE)  # xy = longitude/latitude
+
+# Each column is a month → convert to long format
+library(dplyr)
+library(tidyr)
+# Rename rainfall columns to something consistent
+names(pts)[3:ncol(pts)] <- paste0("Month_", 1:(ncol(pts)-2))
+
+
+head(pts)
+# Convert to long format
+df_long <- pts %>%
+  pivot_longer(
+    cols = starts_with("Month_"),
+    names_to = "Layer",
+    values_to = "Rainfall_mm"
+  )
+
+head(df_long)
+# Add dates
+df_long$Date <- rep(dates, each = nrow(pts))
+
+# Reorder columns
+df_long <- df_long %>% select(x, y, Date, Rainfall_mm)
+
+head(df_long)
+# Export to Excel
+write.csv(df_long, "chirps_monthly_spatial.csv")
